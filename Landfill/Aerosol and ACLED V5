@@ -1,0 +1,147 @@
+////////////////////////////////////////////////////////////////
+//
+//DATA
+//
+////////////////////////////////////////////////////////////////
+
+
+//ACLED data
+var events = ee.FeatureCollection('users/salem043/ACLED19Iraq');
+
+Map.addLayer(events, {color: 'red'}, 'conflict');
+print("Conflict events", events.limit(10));
+
+
+//Iraq country boundary shapefile
+
+var Iraq = ee.FeatureCollection('users/salem043/Iraq_boundary');
+print(Iraq);
+
+//Aerosol index for Iraq in 2019 (January only for testing)
+
+var airq_19 = ee.ImageCollection('COPERNICUS/S5P/NRTI/L3_AER_AI')
+  .select('absorbing_aerosol_index').
+  map(function(image){return image.clip(Iraq)}) 
+  .filterDate('2019-01-01', '2019-01-31');
+
+
+////////////////////////////////////////////////////////////////
+//
+//PRODUCE DAILY MEAN AEROSOL INDEX IMAGE COLLECTION
+//
+////////////////////////////////////////////////////////////////
+
+
+var days = ee.List.sequence(1, 31);
+
+var composites = ee.ImageCollection.fromImages(days.map(function(d) {
+  var filtered = airq_19.filter(ee.Filter.calendarRange({
+    start: d,
+    field: 'day_of_year'
+  }));
+  return filtered.mean().set('day', d);
+}));
+
+print("Composite aerosol", composites);
+
+////////////////////////////////////////////////////////////////
+//
+//BUILD GRID FOR IRAQ (SMALL FOR TESTING)
+//
+////////////////////////////////////////////////////////////////
+
+//Bounding box over Syria
+var lat_start = 29.0990251735;
+var lat_end = 37.3852635768;
+var lon_start = 38.7923405291; 
+var lon_end = 48.5679712258;
+
+//Set number of grid cells
+var num_cells = 10;
+var lon_edge = (lon_end-lon_start)/Math.sqrt(num_cells);
+var lat_edge = (lat_end-lat_start)/Math.sqrt(num_cells);
+// 3) Create the grid
+var polys = [];
+var polys_line = [];
+var cell_id = 0;
+for (var lon = lon_start; lon < lon_end; lon += lon_edge) {
+  var x1 = lon;
+  var x2 = lon + lon_edge;
+  for (var lat = lat_start; lat < lat_end; lat += lat_edge) {
+    cell_id = cell_id + 1;
+    var y1 = lat;
+    var y2 = lat + lat_edge;
+
+    polys.push(ee.Feature(ee.Geometry.Rectangle(x1, y1, x2, y2), {label: cell_id}));
+  }
+}
+
+//Final grid
+var grid = ee.FeatureCollection(polys).filterBounds(Iraq);
+print('Final grid', grid);
+Map.addLayer(grid);
+
+////////////////////////////////////////////////////////////////
+//
+//ADD DAILY NUMBER OF CONFLICT EVENTS PER GRID
+//
+////////////////////////////////////////////////////////////////
+
+
+var counts = grid.map(function(poly){
+  var geom = ee.Feature(poly).geometry();
+  var day=events.filter(ee.Filter.eq("day", days));
+  var inPoly = events.select("day").filterBounds(geom);
+  var numbPoints = inPoly.size();
+  return ee.Feature(geom).set('num_events', numbPoints);
+});
+
+print("meta function trial", counts);
+
+////////////////////////////////////////////////////////////////
+//
+//ADD DAILY MEAN AEROSOL INDEX PER GRID
+//
+////////////////////////////////////////////////////////////////
+
+//First make the aerosol index imagecollection into a stack
+//of images
+
+function newCollectionToImage(collection){
+var stack = ee.Image(collection.iterate(function(img, prev) {
+return ee.Image(prev).addBands(img);
+}, ee.Image(1)));
+ 
+stack = stack.select(ee.List.sequence(1, stack.bandNames().size().subtract(1)));
+return stack;
+}
+
+var tch = composite.map(function(img){
+var y = ee.String(ee.Date(img.get('system:time_start')).get("year"));
+return img.set("year",y).rename(y);
+});
+
+var tchImg = newCollectionToImage(tch).clip(Iraq);
+var aerosol_Iraq=tchImg;
+
+var Aerosoldaily = aerosol_Iraq.reduceRegions({ 
+  reducer: ee.Reducer.mean().group({groupField: 1}),
+  collection: grid, 
+});
+
+
+var addGroups = function(feature) {
+  var statsFormatted = ee.List(feature.get('groups'))
+  .map(function(el) {
+    var d = ee.Dictionary(el);
+    return [ee.Number(d.get('group')).format("20%02d"), d.get('mean')];
+  });
+  var statsDictionary = ee.Dictionary(statsFormatted.flatten());
+
+  return feature.set(statsDictionary);
+};
+
+
+Aerosol_daily = Aerosoldaily.map(addGroups)
+
+

@@ -1,0 +1,89 @@
+////////////////////////////////////////////////////////
+
+//Identify governorate for each event
+
+////////////////////////////////////////////////////////
+
+
+
+//gdelt data
+var events = ee.FeatureCollection('users/salem043/IRAQ_GDELT2');
+
+//Map.addLayer(events, {color: 'red'}, 'conflict');
+print("Conflict events", events.limit(10));
+
+
+//Iraq country boundary shapefile
+
+var Iraq = ee.FeatureCollection('users/salem043/Iraq_ADM3');
+
+//Map.addLayer(Iraq);
+print("Iraq sub-districts", Iraq);
+Map.addLayer(Iraq);
+
+//Identify the governorate of each event
+
+
+
+//Specify the properties that I want to copy from the SSA shapefile
+var properties = ["ADM2_EN", "ADM3_EN", "GLOBALEVENTID"];
+
+// Define a spatial filter as geometries that intersect.
+var spatialFilter = ee.Filter.intersects({
+  leftField: '.geo',
+  rightField: '.geo'
+});
+
+// Join the points and polygons and apply the spatial filter to keep only intersecting ones
+var joinAll = ee.Join.saveAll('matched').apply(events, Iraq, spatialFilter);
+
+// Since the join adds intersecting polygons to a new property 'matched'
+// we need to extract required info from the polygons and copy it to the points
+var gov = joinAll.map(function(feature){
+  var joinedFeat =  ee.List(feature.get('matched'));
+  var polygon = ee.Feature(ee.FeatureCollection(joinedFeat).first());
+  return ee.Feature(feature.copyProperties(polygon, properties)).select(properties);
+});
+
+print("Events with district and subdistrict label", gov.limit(10));
+
+
+//Match by systemindex
+
+
+var toyFilter = ee.Filter.equals({
+  leftField: 'system:index',
+  rightField: 'system:index'
+});
+
+// Define the join.
+var innerJoin = ee.Join.inner();
+
+// Apply the join.
+var Iraq_gov = innerJoin.apply(events, gov,  toyFilter);
+print('Preliminary feature collection', Iraq_gov.limit(10));
+
+var Iraq_gov_final=Iraq_gov.map(function(pair) {
+  var f1 = ee.Feature(pair.get('primary'));
+  var f2 = ee.Feature(pair.get('secondary'));
+  return f1.set(f2.toDictionary());
+});
+
+print(Iraq_gov_final.limit(10));
+
+//Export
+
+Export.table.toDrive(Iraq_gov_final, "Iraq_GDELT");
+
+
+////////////////////////////////////////////////////////
+
+//Compare GDELT 2016-2019 to ACLED 2016-2019
+
+////////////////////////////////////////////////////////
+
+//var ACLED= ee.FeatureCollection('users/salem043/ACLED16to20Iraq')
+//Map.addLayer(ACLED, {color: 'blue'}, 'acled');
+//Map.addLayer(events, {color: 'red'}, 'GDELT');
+
+

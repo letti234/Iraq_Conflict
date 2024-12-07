@@ -1,0 +1,111 @@
+//ACLED data
+var events = ee.FeatureCollection('users/salem043/ACLEDwide');
+
+Map.addLayer(events, {color: 'red'}, 'conflict');
+print("Conflict events", events.limit(10));
+
+
+//Iraq country boundary shapefile
+
+var Iraq = ee.FeatureCollection('users/salem043/Iraq_boundary');
+print(Iraq);
+
+//Aerosol index for Iraq in 2019
+
+var airq_19 = ee.ImageCollection('COPERNICUS/S5P/NRTI/L3_AER_AI')
+  .select('absorbing_aerosol_index').
+  map(function(image){return image.clip(Iraq)}) 
+  .filterDate('2019-01-01', '2019-01-31');
+
+
+//Daily mean aerosol index
+
+var days = ee.List.sequence(1, 31);
+
+var composites = ee.ImageCollection.fromImages(days.map(function(d) {
+  var filtered = airq_19.filter(ee.Filter.calendarRange({
+    start: d,
+    field: 'day_of_year'
+  }));
+  return filtered.mean().set('day', d);
+}));
+
+print("Composite aerosol", composites);
+
+//'IQ': ('Iraq', (38.7923405291, 29.0990251735, 48.5679712258, 37.3852635768)),
+//'SY': ('Syria', (35.7007979673, 32.312937527, 42.3495910988, 37.2298725449)),
+
+//Bounding box over Syria
+var lat_start = 29.0990251735;
+var lat_end = 37.3852635768;
+var lon_start = 38.7923405291; 
+var lon_end = 48.5679712258;
+
+//Set number of grid cells
+var num_cells = 10;
+var lon_edge = (lon_end-lon_start)/Math.sqrt(num_cells);
+var lat_edge = (lat_end-lat_start)/Math.sqrt(num_cells);
+// 3) Create the grid
+var polys = [];
+var polys_line = [];
+var cell_id = 0;
+for (var lon = lon_start; lon < lon_end; lon += lon_edge) {
+  var x1 = lon;
+  var x2 = lon + lon_edge;
+  for (var lat = lat_start; lat < lat_end; lat += lat_edge) {
+    cell_id = cell_id + 1;
+    var y1 = lat;
+    var y2 = lat + lat_edge;
+
+    polys.push(ee.Feature(ee.Geometry.Rectangle(x1, y1, x2, y2), {label: cell_id}));
+  }
+}
+
+//Final grid
+var grid = ee.FeatureCollection(polys).filterBounds(Iraq);
+print('Final grid', grid);
+Map.addLayer(grid);
+
+//Count number of conflict events in the grid by day
+// calculate the number of points inside each polygon
+
+
+var days = ee.List.sequence(1, 365);
+days = days.map(function(n) {
+  return ee.Number(n).add(1);
+});
+
+print(days);
+
+//Write a function that provides GEE with different days
+
+
+var counts = grid.map(function(poly){
+  var geom = ee.Feature(poly).geometry();
+  var day=events.filter(ee.Filter.eq("day", days));
+  var inPoly = events.select("day").filterBounds(geom);
+  var numbPoints = inPoly.size();
+  return ee.Feature(geom).set('num_events', numbPoints);
+});
+
+print("meta function trial", counts);
+
+
+
+
+
+var event1 = events.filterMetadata('day', 'equals', 1);
+
+var counts_1 = grid.map(function(poly){
+  var geom = ee.Feature(poly).geometry();
+  var inPoly = event1.filterBounds(geom);
+  var numbPoints = inPoly.size();
+  return ee.Feature(geom).set('num_events', numbPoints);
+});
+
+print("mini function reference", counts_1);
+
+//print("number of events per grid cell", counts_1);
+
+
+

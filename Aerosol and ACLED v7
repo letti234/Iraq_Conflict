@@ -1,0 +1,153 @@
+////////////////////////////////////////////////////////////////
+//
+//DATA
+//
+////////////////////////////////////////////////////////////////
+
+
+//ACLED data
+var events = ee.FeatureCollection('users/salem043/ACLED19Iraq');
+
+Map.addLayer(events, {color: 'red'}, 'conflict');
+print("Conflict events", events.limit(10));
+
+
+//Iraq country boundary shapefile
+
+var Iraq = ee.FeatureCollection('users/salem043/Iraq_boundary');
+
+
+//Aerosol index for Iraq in 2019 (January only for testing)
+
+var airq_19 = ee.ImageCollection('COPERNICUS/S5P/NRTI/L3_AER_AI')
+  .select('absorbing_aerosol_index').
+  map(function(image){return image.clip(Iraq)}) 
+  .filterDate('2019-01-01', '2019-01-31');
+
+
+
+////////////////////////////////////////////////////////////////
+//
+//PRODUCE DAILY MEAN AEROSOL INDEX IMAGE COLLECTION
+//
+////////////////////////////////////////////////////////////////
+
+
+var days = ee.List.sequence(1, 365);
+
+var composites = ee.ImageCollection.fromImages(days.map(function(d) {
+  var filtered = airq_19.filter(ee.Filter.calendarRange({
+    start: d,
+    field: 'day_of_year'
+  }));
+  return filtered.mean().set('day', d);
+}));
+
+print("Composite aerosol", composites);
+
+////////////////////////////////////////////////////////////////
+//
+//BUILD GRID FOR IRAQ 
+//
+////////////////////////////////////////////////////////////////
+
+//Bounding box over Iraq
+var lat_start = 29.0990251735;
+var lat_end = 37.3852635768;
+var lon_start = 38.7923405291; 
+var lon_end = 48.5679712258;
+
+//Set number of grid cells
+var num_cells = 20000;
+var lon_edge = (lon_end-lon_start)/Math.sqrt(num_cells);
+var lat_edge = (lat_end-lat_start)/Math.sqrt(num_cells);
+// 3) Create the grid
+var polys = [];
+var polys_line = [];
+var cell_id = 0;
+for (var lon = lon_start; lon < lon_end; lon += lon_edge) {
+  var x1 = lon;
+  var x2 = lon + lon_edge;
+  for (var lat = lat_start; lat < lat_end; lat += lat_edge) {
+    cell_id = cell_id + 1;
+    var y1 = lat;
+    var y2 = lat + lat_edge;
+
+    polys.push(ee.Feature(ee.Geometry.Rectangle(x1, y1, x2, y2), {label: cell_id}));
+  }
+}
+
+//Final grid
+var grid = ee.FeatureCollection(polys).filterBounds(Iraq);
+
+
+////////////////////////////////////////////////////////////////
+//
+//ADD DAILY NUMBER OF CONFLICT EVENTS PER GRID
+//
+////////////////////////////////////////////////////////////////
+
+
+var daysOfYear = ee.List.sequence(1, 365);
+var counts = grid.map(function(feature) {
+  var counts = daysOfYear.map(function(day) {
+    var dayEvents = events
+      .filter(ee.Filter.eq("day", day))
+      .filterBounds(feature.geometry());
+    var key = ee.String('day').cat(ee.String(ee.Number(day).int()))
+    return ee.List([key, dayEvents.size()]);  
+  }).flatten()
+  return feature.set(ee.Dictionary(counts))
+});
+
+
+//print("meta function trial", counts.limit(10));
+
+////////////////////////////////////////////////////////////////
+//
+//ADD DAILY MEAN AEROSOL INDEX PER GRID
+//
+////////////////////////////////////////////////////////////////
+
+
+composites = composites.filter(ee.Filter.listContains("system:band_names", "absorbing_aerosol_index"));
+print(composites)
+
+
+
+
+var airquality = ee.FeatureCollection(composites.map(function(image) {
+
+    // apply the mean reducer 
+    var dayEvents = image.reduceRegions({
+      collection: grid,
+      reducer: ee.Reducer.mean(),
+      scale: 100
+    });
+  var key = ee.String('day').cat(ee.String(ee.Number(image.get('day')).int()));
+
+  return dayEvents;  
+})).flatten();
+
+////////////////////////////////////////////////////////////////
+//
+//EXPORTING
+//
+////////////////////////////////////////////////////////////////
+
+var chunk = 5000;
+var collectionSize = 20000;
+for (var i = 0; i<collectionSize;i=i+chunk){
+  var subset = ee.FeatureCollection(airquality.toList(chunk, i));
+  Export.table.toDrive(subset, "Aerosol_", "Conflict and air quality");
+}
+
+var chunk = 5000;
+var collectionSize = 20000;
+for (var i = 0; i<collectionSize;i=i+chunk){
+  var subset = ee.FeatureCollection(counts.toList(chunk, i));
+  Export.table.toDrive(subset, "Counts_", "Conflict and air quality");
+}
+
+
+

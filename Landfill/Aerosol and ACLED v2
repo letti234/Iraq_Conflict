@@ -1,0 +1,135 @@
+//////////////////////////////////////////////////////////////////////////
+//
+//Conflict and air quality 
+
+
+
+//ACLED data
+var events = ee.FeatureCollection('users/salem043/ACLED19Iraq');
+
+Map.addLayer(events, {color: 'red'}, 'conflict');
+print("Conflict events", events.limit(10));
+
+
+//Iraq country boundary shapefile
+
+var countries = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017");
+var Iraq = countries.filter(ee.Filter.eq('country_na', 'Iraq'));
+
+Map.addLayer(Iraq);
+
+//Aerosol index for Iraq in 2019
+
+var airq_19 = ee.ImageCollection('COPERNICUS/S5P/NRTI/L3_AER_AI')
+  .select('absorbing_aerosol_index').
+  map(function(image){return image.clip(Iraq)}) 
+  .filterDate('2019-01-01', '2019-01-31');
+  
+var airq_19_print=airq_19.limit(10)
+print("Original aerosol", airq_19_print);
+
+////////////////////////////////////////////////////////////////
+//
+//PRODUCE DAILY MEAN AEROSOL INDEX IMAGE COLLECTION
+//
+////////////////////////////////////////////////////////////////
+
+
+var daysOfMonth = ee.List.sequence(1, 31); //Restricted to first 31 for trial run
+
+var composites = ee.ImageCollection.fromImages(daysOfMonth.map(function(d) {
+  var filtered = airq_19.filter(ee.Filter.calendarRange({
+    start: d,
+    field: 'day_of_year'
+  }));
+  return filtered.mean().set('day', d);
+}));
+
+print("Composite aerosol", composites);
+
+////////////////////////////////////////////////////////////////
+//
+//BUILD GRID FOR IRAQ (GRIDS ARE LARGE FOR TESTING)
+//
+////////////////////////////////////////////////////////////////
+
+//Bounding box 
+var lat_start = 29.0990251735;
+var lat_end = 37.3852635768;
+var lon_start = 38.7923405291; 
+var lon_end = 48.5679712258;
+
+//Set number of grid cells
+var num_cells = 10;
+var lon_edge = (lon_end-lon_start)/Math.sqrt(num_cells);
+var lat_edge = (lat_end-lat_start)/Math.sqrt(num_cells);
+// 3) Create the grid
+var polys = [];
+var polys_line = [];
+var cell_id = 0;
+for (var lon = lon_start; lon < lon_end; lon += lon_edge) {
+  var x1 = lon;
+  var x2 = lon + lon_edge;
+  for (var lat = lat_start; lat < lat_end; lat += lat_edge) {
+    cell_id = cell_id + 1;
+    var y1 = lat;
+    var y2 = lat + lat_edge;
+
+    polys.push(ee.Feature(ee.Geometry.Rectangle(x1, y1, x2, y2), {label: cell_id}));
+  }
+}
+
+//Final grid
+var grid = ee.FeatureCollection(polys).filterBounds(Iraq);
+print('Final grid', grid);
+Map.addLayer(grid);
+
+////////////////////////////////////////////////////////////////
+//
+//ADD DAILY NUMBER OF CONFLICT EVENTS PER GRID
+//
+////////////////////////////////////////////////////////////////
+
+var daysOfYear = ee.List.sequence(1, 365); //All days available
+var counts = grid.map(function(feature) {  //Mapping a function over all th grids
+  var counts = daysOfYear.map(function(day) { //adding to that function the daily mapping
+    var dayEvents = events //Calling on event data, which we now need to filter
+      .filter(ee.Filter.eq("day", day))
+      .filterBounds(feature.geometry());
+    var key = ee.String('day').cat(ee.String(ee.Number(day).int()))
+    return ee.List([key, dayEvents.size()]);  
+  }).flatten()
+  return feature.set(ee.Dictionary(counts))
+});
+
+print("meta function trial", counts.limit(10));
+
+////////////////////////////////////////////////////////////////
+//
+//ADD DAILY MEAN AEROSOL INDEX PER GRID
+//
+////////////////////////////////////////////////////////////////
+
+
+var daysOfYear = ee.List.sequence(1, 365); //All days available
+var counts = grid.map(function(feature) {  //Mapping a function over all th grids
+  var counts = daysOfYear.map(function(day) { //adding to that function the daily mapping
+    var dayEvents = composites //Calling on composite data
+      .filter(ee.Filter.eq("day", day))
+      .filterBounds(feature.geometry())
+      .reduceRegions ({
+    collection: grid,
+    reducer: ee.Reducer.mean(),
+    scale: 100
+      });
+    var key = ee.String('day').cat(ee.String(ee.Number(day).int()))
+    return ee.List([key, dayEvents.size()]);  
+  }).flatten()
+  return feature.set(ee.Dictionary(counts))
+});
+
+print("aerosol by grid and day", counts.limit(10));
+
+
+
+

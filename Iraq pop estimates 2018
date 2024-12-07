@@ -1,0 +1,296 @@
+////////////////////////////////////////////////////////
+
+//Identify governorate for each event
+
+////////////////////////////////////////////////////////
+
+
+//Iraq country boundary shapefile
+var Iraq = ee.FeatureCollection('users/salem043/Iraq_ADM1');
+
+//Map.addLayer(Iraq);
+print("Iraq governorates", Iraq);
+Map.addLayer(Iraq);
+
+//Worldpop data
+
+var Allpop = ee.ImageCollection("WorldPop/GP/100m/pop")
+  .filterDate('2016')
+  .filterBounds(Iraq)
+  .map(function(image){return image.clip(Iraq)}) ;
+
+print("Pop", Allpop.limit(10));
+Map.addLayer(Allpop);
+
+
+//Collapse Allpop into governorate counts
+
+//This function converts our image collection into a stack of bands
+function newCollectionToImage(collection){
+var stack = ee.Image(collection.iterate(function(img, prev) {
+return ee.Image(prev).addBands(img);
+}, ee.Image(1)));
+ 
+stack = stack.select(ee.List.sequence(1, stack.bandNames().size().subtract(1)));
+return stack;
+}
+
+//Apply the function
+var tch = Allpop.map(function(img){
+var y = ee.String(ee.Date(img.get('system:time_start')).get("year"));
+return img.set("year",y).rename(y);
+});
+
+var tchImg = newCollectionToImage(tch).clip(Iraq);
+var pop_Iraq=tchImg;
+
+var pop_Iraq = 
+pop_Iraq.select(['2016'],
+['pop_17']);
+
+
+//Sum population counts in the pixels to the grid
+var Iraq_pop = pop_Iraq.reduceRegions(Iraq,ee.Reducer.sum());
+
+print("population by gov", Iraq_pop);
+
+
+////////////////////////////////////////////////////////
+
+//Find the mean lights index for each governorate
+
+////////////////////////////////////////////////////////
+
+//Nighttime lights data
+var lights = 
+ee.ImageCollection("NOAA/DMSP-OLS/NIGHTTIME_LIGHTS")
+  .filterBounds(Iraq)
+  .map(function(image){return image.clip(Iraq)}) ;
+print("Lights data", lights);
+
+//Save a subset of the lights data: just the stable lights band for 2013
+var bandSubset = lights.select(['stable_lights'],['stable_lights']).filterDate("2013");
+print(bandSubset);
+Map.addLayer(bandSubset);
+
+//Transform from image collection into simple image with one band
+var lightsImage = bandSubset.toBands();
+//print(lightsImage);
+
+//Use reducer function to obtain mean lights per governorate
+var lightsIraqFinal = lightsImage.reduceRegions(Iraq,ee.Reducer.mean());
+
+print("lights by gov", lightsIraqFinal);
+
+
+////////////////////////////////////////////////////////
+
+//Distance between centroid of governorate and Syrian border
+
+////////////////////////////////////////////////////////
+
+var SyriaBorder = ee.FeatureCollection('users/salem043/syr_admin0');
+
+//Map.addLayer(SyriaBorder);
+
+//Only keep the part of the Syrian border that touches Iraq
+var IraqGeom  = Iraq.geometry();
+
+// Now map over your study sites and use intersect to clip them on the region(s)
+var sharedBorder = SyriaBorder.map(function(f) {
+  return f.intersection(IraqGeom, 1); //1 refers to the maxError argument
+});
+Map.addLayer(sharedBorder);
+
+//These functions identify the centroid for each of the Iraqi governorates
+
+var getCentroids = function(feature) {
+  return feature.set({centralPoint: feature.centroid()});
+};
+
+var IraqCentroids = lightsIraqFinal.map(getCentroids);
+
+var IraqCentroids2 = IraqCentroids.map(function(f) {
+  var centroid = ee.Feature(ee.List(f.get('centralPoint')));
+  return centroid;
+});
+Map.addLayer(IraqCentroids2)
+
+
+
+
+//Function to find nearest point on the shared border and calculate distance
+
+var spatialFilter = ee.Filter.withinDistance({
+  distance: 5000000000000,  //Make it big, we need to link Basra etc. to border
+  leftField: '.geo',
+  rightField: '.geo',
+  maxError: 10
+});
+
+
+
+
+// Join the points
+var joined = ee.Join.saveAll({
+  matchesKey: 'neighbors', 
+  measureKey: 'distance',
+  ordering: 'distance'
+}).apply({
+  primary: IraqCentroids2, 
+  secondary: sharedBorder, 
+  condition: spatialFilter
+});
+
+// Get distance to nearest point.
+var withNearestDist = joined.map(function(f) {
+  var nearestDist = ee.Feature(ee.List(f.get('neighbors')).get(0))
+      .get('distance');
+  return f.set('nearestDist', nearestDist);
+});
+
+//Looks good but borderlands marked as zeroes (?)
+
+print("Nearest dist. gov and border", withNearestDist)
+
+
+
+////////////////////////////////////////////////////////
+
+//Combine mean lights dataframe and nearest distance dataframe
+
+////////////////////////////////////////////////////////
+
+
+var ForExport = withNearestDist.select(
+    ['ADM1_EN', 'nearestDist', 'mean']           
+);
+
+print(ForExport);
+
+Export.table.toDrive(ForExport, "IraqLightsDist", "Iraq conflict");
+
+
+
+
+
+////////////////////////////////////////////////////////
+
+//Find the mean lights index for each subdistrict
+
+////////////////////////////////////////////////////////
+//Iraq country boundary shapefile
+var IraqSubdist = ee.FeatureCollection('users/salem043/Iraq_ADM3');
+Map.addLayer(IraqSubdist)
+//Nighttime lights data
+var lights = 
+ee.ImageCollection("NOAA/DMSP-OLS/NIGHTTIME_LIGHTS")
+  .filterBounds(Iraq)
+  .map(function(image){return image.clip(Iraq)}) ;
+print("Lights data", lights);
+
+//Save a subset of the lights data: just the stable lights band for 2013
+var bandSubset = lights.select(['stable_lights'],['stable_lights']).filterDate("2013");
+print(bandSubset);
+Map.addLayer(bandSubset);
+
+//Transform from image collection into simple image with one band
+var lightsImage = bandSubset.toBands();
+//print(lightsImage);
+
+//Use reducer function to obtain mean lights per governorate
+var lightsIraqFinal = lightsImage.reduceRegions(IraqSubdist,ee.Reducer.mean());
+
+print("lights by subdistrict", lightsIraqFinal);
+
+
+////////////////////////////////////////////////////////
+
+//Distance between centroid of governorate and Syrian border
+
+////////////////////////////////////////////////////////
+
+var SyriaBorder = ee.FeatureCollection('users/salem043/syr_admin0');
+
+//Map.addLayer(SyriaBorder);
+
+//Only keep the part of the Syrian border that touches Iraq
+var IraqGeom  = Iraq.geometry();
+
+// Now map over your study sites and use intersect to clip them on the region(s)
+var sharedBorder = SyriaBorder.map(function(f) {
+  return f.intersection(IraqGeom, 1); //1 refers to the maxError argument
+});
+Map.addLayer(sharedBorder);
+
+//These functions identify the centroid for each of the Iraqi governorates
+
+var getCentroids = function(feature) {
+  return feature.set({centralPoint: feature.centroid()});
+};
+
+var IraqCentroids = lightsIraqFinal.map(getCentroids);
+
+var IraqCentroids2 = IraqCentroids.map(function(f) {
+  var centroid = ee.Feature(ee.List(f.get('centralPoint')));
+  return centroid;
+});
+Map.addLayer(IraqCentroids2)
+
+
+
+
+//Function to find nearest point on the shared border and calculate distance
+
+var spatialFilter = ee.Filter.withinDistance({
+  distance: 5000000000000,  //Make it big, we need to link Basra etc. to border
+  leftField: '.geo',
+  rightField: '.geo',
+  maxError: 10
+});
+
+
+
+
+// Join the points
+var joined = ee.Join.saveAll({
+  matchesKey: 'neighbors', 
+  measureKey: 'distance',
+  ordering: 'distance'
+}).apply({
+  primary: IraqCentroids2, 
+  secondary: sharedBorder, 
+  condition: spatialFilter
+});
+
+// Get distance to nearest point.
+var withNearestDist = joined.map(function(f) {
+  var nearestDist = ee.Feature(ee.List(f.get('neighbors')).get(0))
+      .get('distance');
+  return f.set('nearestDist', nearestDist);
+});
+
+//Looks good but borderlands marked as zeroes (?)
+
+print("Nearest dist. gov and border", withNearestDist)
+
+
+
+////////////////////////////////////////////////////////
+
+//Combine mean lights dataframe and nearest distance dataframe
+
+////////////////////////////////////////////////////////
+
+
+var ForExport2 = withNearestDist.select(
+    ['ADM3_EN', 'nearestDist', 'mean']           
+);
+
+print(ForExport2);
+
+
+
+Export.table.toDrive(ForExport2, "IraqLightsDistSubdistricts", "Iraq conflict");
+
+

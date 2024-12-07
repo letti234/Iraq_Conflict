@@ -1,0 +1,55 @@
+//ACLED data
+var events = ee.FeatureCollection('users/salem043/ACLED19Iraq');
+
+Map.addLayer(events, {color: 'red'}, 'conflict');
+print("Conflict events", events.limit(10));
+
+
+//Iraq country boundary shapefile
+
+var Iraq = ee.FeatureCollection('users/salem043/Iraq_boundary');
+
+
+
+//Aerosol index for Iraq in 2019
+
+var airq_19 = ee.ImageCollection('COPERNICUS/S5P/NRTI/L3_AER_AI')
+  .select('absorbing_aerosol_index').
+  map(function(image){return image.clip(Iraq)}) 
+  .filterDate('2019-01-01', '2019-01-31');
+
+
+//Daily mean aerosol index
+
+var days = ee.List.sequence(1, 31);
+
+var composites = ee.ImageCollection.fromImages(days.map(function(d) {
+  var filtered = airq_19.filter(ee.Filter.calendarRange({
+    start: d,
+    field: 'day_of_year'
+  }));
+  return filtered.mean().set('day', d);
+}));
+
+print("Composite aerosol", composites);
+
+
+
+
+//match by day
+
+var spatialFilter = ee.Filter.and(
+  ee.Filter.intersects({
+    leftField: '.geo',
+    rightField: '.geo'
+  }),
+  ee.Filter.equals({
+    leftField: 'day',
+    rightField: 'day'
+  })
+);
+
+var joinAll = ee.Join.saveAll('matched').apply(events, composites, spatialFilter);
+print("Day and geo join", joinAll);
+
+

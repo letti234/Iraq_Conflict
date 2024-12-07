@@ -1,0 +1,9 @@
+var Iraq = ee.FeatureCollection('users/salem043/Iraq_ADM1');
+
+var LC = ee.ImageCollection("MODIS/006/MCD12Q1")
+ .filterDate('2013', "2018")
+  .filterBounds(Iraq)
+  .map(function(image){return image.clip(Iraq)}) ;
+  
+  print("land cover", LC);
+  Map.addLayer(LC);
